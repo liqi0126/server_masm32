@@ -6,10 +6,15 @@ includelib msvcrt.lib
 ExitProcess PROTO STDCALL:DWORD
 
 .data
-relativePathHead byte "./userInfo/",0
-fileTail byte ".txt",0
+
+user_info_folder byte "./userInfo", 0
+relativePathHead byte "./userInfo", 0
+file_format byte "%s/%s.%s", 0
+
 txtName byte 256 dup (0)
 my_tab byte " ",0
+
+txt_tail byte "txt",0
 
 test_username byte "wyq0706",0
 test_password byte "123456",0
@@ -17,47 +22,6 @@ test_buffer byte 100 dup(?)
 
 
 .code
-
-;--------------------------------------------------------
-myPrint PROC pString:PTR BYTE
-;打印字符串
-;--------------------------------------------------------
-    LOCAL handle:DWORD        
-    LOCAL bwrt:DWORD
-    INVOKE GetStdHandle, STD_OUTPUT_HANDLE
-    mov handle,eax
-  ; 向控制台写一个字符串
-    INVOKE WriteConsole,
-      handle,          ; 控制台输出句柄
-      ADDR pString,           ; 字符串指针
-      sizeof pString,            ; 字符长度
-      bwrt,      ; 返回输出字节数
-      0                       ; 未使用
-    ret
-myPrint ENDP
-
-
-;--------------------------------------------------------
-MemSetZero PROC str1:PTR BYTE, str_len:DWORD
-;将内存空间设置为0
-;str1 首地址
-;len 长度
-	push ecx
-	push eax
-	push edx
-	mov ecx, str_len
-	mov edx, str1
-	mov al, 0
-Lmemsetzero1:
-	mov [edx], al
-	inc edx
-	loop Lmemsetzero1
-	pop edx
-	pop eax
-	pop ecx
-	ret
-MemSetZero ENDP
-
 
 ;--------------------------------------------------------
 Str_length PROC USES edi, pString:PTR BYTE       ;指向字符串
@@ -101,16 +65,8 @@ getUserFileName PROC USES eax ecx,username:PTR BYTE
 ;获得该用户名的文件路径
 ;写入txtName
 ;-----------------------------------------------------------
-    ;拼接文件路径字符串
-    invoke RtlZeroMemory,addr txtName,sizeof txtName
-    invoke Str_copy ,addr relativePathHead,addr txtName
-    mov ecx,offset txtName
-    invoke Str_length,addr relativePathHead
-    add ecx,eax
-    invoke Str_copy,username, ecx
-    invoke Str_length,username
-    add ecx,eax
-    invoke Str_copy,addr fileTail,ecx
+	invoke RtlZeroMemory, addr txtName, sizeof txtName
+	invoke crt_sprintf, addr txtName, addr file_format, addr user_info_folder, username, addr txt_tail
     ret 
 getUserFileName ENDP
 
@@ -130,11 +86,11 @@ writeNewUser PROC USES eax, username:PTR BYTE,password:PTR BYTE
 
     mov @hFile, fopen("./userInfo/allUsers.txt")            ; open the allUsers file
     mov @cloc, fseek(@hFile,0,FILE_END)           ; set the file pointer to the end
-    fprint @hFile,username    ; append username to existing data
+    fprint @hFile, username    ; append username to existing data
     fclose @hFile                                ; close the file
 
     mov @hFile, fcreate(addr txtName)          ; create the USER.txt
-    fprint @hFile,password    ; append password to existing data
+    fprint @hFile, password    ; append password to existing data
     fclose @hFile                                ; close the file
    
     ret
@@ -151,14 +107,14 @@ writeNewFriend PROC USES eax, user1:PTR BYTE,user2:PTR BYTE
 
     invoke getUserFileName, user1
     mov @hFile, fopen(addr txtName)        
-    mov @cloc, fseek(@hFile,0,FILE_END)         
+    mov @cloc, fseek(@hFile, 0, FILE_END)         
     fprint @hFile,user2 
     
     fclose @hFile                
 
     invoke getUserFileName, user2
     mov @hFile, fopen(addr txtName)         
-    mov @cloc, fseek(@hFile,0,FILE_END)       
+    mov @cloc, fseek(@hFile, 0, FILE_END)       
     fprint @hFile,user1    
     fclose @hFile                          
    
@@ -168,7 +124,7 @@ writeNewFriend ENDP
 
 
 ;-------------------------------------------------------------
-ifLogged PROC  username:PTR BYTE
+ifSignIn PROC  username:PTR BYTE
 ; 把用户名传入，检查是否注册过
 ; 如果注册过eax=1，反之为0
 ;-------------------------------------------------------------       
@@ -181,7 +137,7 @@ ifLogged PROC  username:PTR BYTE
     .endif
     ret
 
-ifLogged ENDP
+ifSignIn ENDP
 
 
 
