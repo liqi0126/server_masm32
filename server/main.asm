@@ -27,13 +27,12 @@ ifSignIn PROTO :PTR BYTE
 ifFriends PROTO: PTR BYTE,:PTR BYTE
 ifPasswordRight PROTO :PTR BYTE,:PTR BYTE
 readAllFriends PROTO :PTR BYTE,:PTR BYTE
-myreadline PROTO :PTR BYTE,:PTR BYTE,:DWORD
 
 ;==================== STRUCT =======================
 client STRUCT
 	username db 64 DUP(?)
 	sockfd dd ?
-	status dd 0
+	online db 0
 client ENDS
 
 threadParam STRUCT
@@ -50,6 +49,9 @@ CONNECT_LOGIN	EQU		48 ; ASCII '0'
 CONNECT_SIGNUP	EQU		49 ; ASCII '1'
 
 IDC_COUNT EQU 40002
+
+MSG_HEADER_ONLINE	EQU		4
+MSG_HEADER_OFFLINE	EQU		5
 
 ;==================== DATA =======================
 .data
@@ -71,10 +73,11 @@ ERR_BIND_SOCKET		db "Fail to Bind Socket", 0
 SUCCESS_HINT		db "success", 0
 FAIL_HINT			db "fail", 0
 
+MSG_FORMAT			db "%d %s", 0
+
 ; server
 serverPort dw ?
 listenSocket dd  ?
-
 
 szConnect db "连接",0
  
@@ -86,6 +89,7 @@ typeCodeTwo db "2", 0
 typeCodeThree db "3", 0
 typeCodeFour db "4", 0
 
+; thread
 dwThreadCounter dd ?
 dwFlag dd ?
 F_STOP dd ?
@@ -121,19 +125,14 @@ addFriendFail db "6 fail", 0
 .code
 
 
-nameToFd PROC nameStr:ptr byte, targetfd:ptr dword
-	LOCAL @cursor:dword
-	mov eax, clientnum
-	mov @cursor, 0
-	mov edx, @cursor
-	mov ebx, 0
-	.while edx < eax
-		push edx
-		.if clientlist[ebx].status == 1
-			push ebx
-			add ebx, offset clientlist
-			invoke crt_strcmp, ebx, nameStr
-			pop ebx
+getClientFd PROC username:ptr byte, targetfd:ptr dword
+	mov eax, 0 ; cur client num
+	mov ebx, 0 ; cur client offset
+	.while eax < clientnum
+		.if clientlist[ebx].online == 1
+			pushad
+			invoke crt_strcmp, addr clientlist[ebx].username, username
+			pushad
 			.if eax == 0
 				mov eax, clientlist[ebx].sockfd
 				mov edx, targetfd
@@ -142,18 +141,41 @@ nameToFd PROC nameStr:ptr byte, targetfd:ptr dword
 				ret
 			.endif
 		.endif
+		inc eax
 		add ebx, type client
-		pop edx
-		inc edx
-		mov eax, clientnum
 	.endw
-	mov eax, 0
-	sub eax, 1
+
+	mov eax, -1
 	mov edx, targetfd
 	mov [edx], eax
 	mov eax, 0
 	ret
-nameToFd ENDP
+getClientFd ENDP
+
+
+addNewClient PROC username:ptr byte, fd:dword
+	mov eax, 0 ; cur client num
+	mov ebx, 0 ; cur client offset
+	.while eax < clientnum
+		pushad
+		invoke crt_strcmp, addr clientlist[ebx].username, username
+		.if eax == 0
+			mov eax, fd
+			mov clientlist[ebx].sockfd, eax
+			mov clientlist[ebx].online, 1
+			ret
+		.endif
+		popad
+		inc eax
+		add ebx, type client
+	.endw
+	mov eax, fd
+	mov clientlist[ebx].sockfd, eax
+	mov clientlist[ebx].online, 1
+	invoke crt_strcpy, addr clientlist[ebx].username, username
+	inc clientnum
+	ret
+addNewClient ENDP
 
 
 parseFriendList PROC friendlist:ptr byte, msgField:ptr byte
@@ -172,16 +194,12 @@ parseFriendList PROC friendlist:ptr byte, msgField:ptr byte
 			push esi
 			push eax
 			push edx
-			;sprintf(msgField, "%s%s", msgField, content)
 			invoke crt_sprintf, msgField, addr msgFormat4, msgField, edx
 			pop edx
-			invoke nameToFd, edx, addr @tfd
-			;mov eax, 1
+			invoke getClientFd, edx, addr @tfd
 			.if eax == 1
-				;sprintf(msgField, "%s %d ", msgField, 1)
 				invoke crt_sprintf, msgField, addr msgFormat5, msgField, 1
 			.else
-				;sprintf(msgField, "%s %d ", msgField, 0)
 				invoke crt_sprintf, msgField, addr msgFormat5, msgField, 0
 			.endif
 			pop eax
@@ -214,50 +232,30 @@ broadcastOnOffLine PROC currentname:ptr byte, isOn:dword
 	LOCAL targetname:ptr byte
 	LOCAL targetfd:dword
 	LOCAL @msgField[1024]:byte
-	push eax
-	push ebx
-	push edx
-	mov eax, clientnum
+	mov eax, 0
 	mov ebx, 0
-	mov edx, 0
-	.while ebx < eax
-		push eax
-		push ebx
-		push edx
-		.if clientlist[edx].status == 1
-			; 遍历当前在线用户列表，找出下（上）线用户的好友
-			mov eax, clientlist[edx].sockfd
+	.while eax < clientnum
+		pushad
+		.if clientlist[ebx].online == 1
+			mov eax, clientlist[ebx].sockfd
 			mov targetfd, eax
-			add edx, offset clientlist
-			mov targetname, edx
+			add ebx, offset clientlist
+			mov targetname, ebx
 			invoke ifFriends, targetname, currentname
 			.if eax == 1
-				; 如果该用户是下（上）线用户的好友 向他发送下线信息
-				mov eax, isOn
-				.if eax == 1
-					invoke RtlZeroMemory, addr @msgField, 1024
-					; sprintf(msg, "%d %s", 4, name)
-					invoke crt_sprintf, addr @msgField, addr msgFormat3, 4, currentname
+				.if isOn == 1
+					invoke crt_sprintf, addr @msgField, addr MSG_FORMAT, MSG_HEADER_ONLINE, currentname
 				.else
-					invoke RtlZeroMemory, addr @msgField, 1024
-					; sprintf(msg, "%d %s", 5, name)
-					invoke crt_sprintf, addr @msgField, addr msgFormat3, 5, currentname
-					;invoke StdOut, addr @msgField
+					invoke crt_sprintf, addr @msgField, addr MSG_FORMAT, MSG_HEADER_OFFLINE, currentname
 				.endif
-				; 发送
 				invoke crt_strlen, addr @msgField
 				invoke send, targetfd, addr @msgField, eax, 0
 			.endif
 		.endif
-		pop edx
-		pop ebx
-		pop eax
-		add edx, type client
-		inc ebx
+		popad
+		inc eax
+		add ebx, type client
 	.endw
-	pop edx
-	pop ebx
-	pop eax
 	ret
 broadcastOnOffLine ENDP
 
@@ -281,7 +279,7 @@ msgParser PROC buffer:ptr byte, targetfd:ptr dword, content:ptr byte
 				inc eax
 				pop edx
 				push eax
-				invoke nameToFd, edx, targetfd
+				invoke getClientFd, edx, targetfd
 				.if eax == 0
 					mov eax, 5
 					ret
@@ -311,7 +309,7 @@ msgParser PROC buffer:ptr byte, targetfd:ptr dword, content:ptr byte
 				inc eax
 				pop edx
 				push eax
-				invoke nameToFd, edx, targetfd
+				invoke getClientFd, edx, targetfd
 				.if eax == 0
 					mov eax, 5
 					ret
@@ -349,8 +347,6 @@ msgParser ENDP
 serviceThread PROC params:PTR threadParam
 	LOCAL @stFdset:fd_set,@stTimeval:timeval
 	LOCAL @szBuffer:ptr byte
-	LOCAL @type:dword
-	LOCAL @currentSock:dword
 	LOCAL @currentUsername[64]:byte
 	LOCAL @targetSockfd:dword
 	LOCAL @msgContent:ptr byte
@@ -362,29 +358,24 @@ serviceThread PROC params:PTR threadParam
 	mov @szBuffer, alloc(BUFSIZE)
 	mov @msgField, alloc(BUFSIZE)
 	mov @msgContent, alloc(BUFSIZE)
+
 	invoke RtlZeroMemory, addr @currentUsername, 64
 	mov esi, params
 	mov eax, (threadParam PTR [esi]).sockid
 	mov _hSocket, eax
 	mov eax, (threadParam PTR [esi]).clientid
 	mov _clientid, eax
+
 	mov ebx, type client
 	mul ebx
 	add eax, offset clientlist
 	invoke crt_strcpy, addr @currentUsername, eax
-	invoke StdOut, addr @currentUsername
 	pop eax
 	inc dwThreadCounter
-	;----------------FOR DEBUG--------------
-	;invoke recv, _hSocket, addr @szBuffer, 512, 0
-	;invoke StdOut,addr @szBuffer
-	;invoke send, _hSocket, addr loginFailure, sizeof loginFailure, 0
-	;-----------------------------------------
 
-	; 返回好友列表
+	; read and send friend lists
 	invoke RtlZeroMemory, addr @friendlist, 1024
 	invoke readAllFriends, addr @currentUsername, addr @friendlist
-	invoke StdOut, addr @friendlist
 	invoke RtlZeroMemory, @msgField, BUFSIZE
 	invoke parseFriendList, addr @friendlist, @msgField
 	invoke crt_strlen, @msgField
@@ -443,7 +434,7 @@ serviceThread PROC params:PTR threadParam
 						; 两人不是好友 可以添加
 						invoke writeNewFriend, @msgContent, addr @currentUsername
 						; 检查另一方是否在线，如在线，向双方广播
-						invoke nameToFd, @msgContent, addr @targetSockfd
+						invoke getClientFd, @msgContent, addr @targetSockfd
 						.if eax == 1
 							; 对方在线，需对双方广播
 
@@ -500,7 +491,7 @@ serviceThread PROC params:PTR threadParam
 	mov eax, _clientid
 	mov ebx, type client
 	mul ebx
-	mov clientlist[eax].status, 0
+	mov clientlist[eax].online, 0
 	; 向好友广播其下线信息
 	invoke broadcastOnOffLine, addr @currentUsername, 0
 	free @msgField
@@ -526,7 +517,7 @@ logIn PROC sockfd:dword, username:ptr byte, password:ptr byte
 	invoke ifPasswordRight, username, password
 	.if eax == 1
 		; repeat login
-		invoke nameToFd, username, addr @tempfd
+		invoke getClientFd, username, addr @tempfd
 		.if eax == 1
 			invoke send, sockfd, addr FAIL_HINT, sizeof FAIL_HINT, 0
 			mov eax, 0
@@ -536,28 +527,10 @@ logIn PROC sockfd:dword, username:ptr byte, password:ptr byte
 		; login success
 		invoke send, sockfd, addr SUCCESS_HINT, sizeof SUCCESS_HINT, 0
 
-		; 写入当前在线用户列表
-		mov eax, clientnum
-		mov ebx, type client
-		mul ebx
-		push eax
-		add eax, offset clientlist
-		mov ebx, offset client.username
-		add eax, ebx
-		push eax
-		mov edx, eax
-		invoke RtlZeroMemory, edx, 64
-		pop edx
-		push edx
-		invoke crt_strcpy, edx, username
-		pop edx
-		mov eax, sockfd
-		pop edx
-		mov clientlist[edx].sockfd, eax
-		mov clientlist[edx].status, 1
-		inc clientnum
+		; add new client
+		invoke addNewClient, username, sockfd
 
-		; 向好友广播他的上线
+		; broadcast on or off line
 		invoke broadcastOnOffLine, username, 1
 		mov eax, 1
 		ret
@@ -590,7 +563,6 @@ clientConnect PROC sockfd:dword
 	LOCAL @type[10]:byte
 	LOCAL @username[512]:byte
 	LOCAL @password[512]:byte
-	LOCAL @tempfd:dword
 	invoke RtlZeroMemory, addr @username, 512
 	invoke RtlZeroMemory, addr @password, 512
 	invoke RtlZeroMemory, addr @type, 10
@@ -641,7 +613,6 @@ clientConnect ENDP
 
 main PROC
     LOCAL @stWsa:WSADATA  
-    LOCAL @szBuffer[256]:byte
     LOCAL @stSin:sockaddr_in
 	LOCAL @connSock:dword
 	LOCAL @param_to_thread:threadParam
