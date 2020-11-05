@@ -1,15 +1,12 @@
-
 include masm32rt.inc
 include msvcrt.inc
+include header.inc
+
 includelib msvcrt.lib
 
-ExitProcess PROTO STDCALL:DWORD
-
 .data
-userFileName byte 1024 dup (0)
-
-PASSWORD_HEADER byte "PASSWORD", 0
-FRIENDS_HEADER byte "FRIENDS", 0
+PASSWORD_HEADER		byte "PASSWORD", 0
+FRIENDS_HEADER		byte "FRIENDS", 0
 
 EMPTY				byte 0
 
@@ -18,14 +15,10 @@ ALL_USER_FILE		byte "allUsers", 0
 FILE_FORMAT			byte "%s/%s.%s", 0
 TXT_TAIL			byte "txt",0
 
-ERR_OPEN_FILE_HINT byte "File is Null", 0ah, 0dh, 0
+ERR_OPEN_FILE_HINT	byte "File is Null", 0ah, 0dh, 0
 
-SEP byte " ", 0
 
-test_username byte "wyq0706",0
-test_password byte "123456",0
-test_buffer byte 100 dup(?)
-
+userFileName byte 1024 dup (0)
 .code
 
 ;--------------------------------------------------------------
