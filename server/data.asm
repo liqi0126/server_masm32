@@ -10,15 +10,13 @@ FRIENDS_HEADER		byte "FRIENDS", 0
 
 EMPTY				byte 0
 
-USER_INFO_FOLDER	byte "./userInfo", 0
-ALL_USER_FILE		byte "allUsers", 0
+USER_INFO_FOLDER	byte "./USERS", 0
 FILE_FORMAT			byte "%s/%s.%s", 0
 TXT_TAIL			byte "txt",0
 
-ERR_OPEN_FILE_HINT	byte "File is Null", 0ah, 0dh, 0
-
-
 userFileName byte 1024 dup (0)
+
+
 .code
 
 ;--------------------------------------------------------------
@@ -28,6 +26,7 @@ getUserFileName PROC USES eax ecx, username:PTR BYTE
 	invoke crt_sprintf, addr userFileName, addr FILE_FORMAT, addr USER_INFO_FOLDER, username, addr TXT_TAIL
     ret 
 getUserFileName ENDP
+
 
 writeUserFile PROC username:ptr byte, password:ptr byte, friends:ptr byte
 	local @fp :dword
@@ -44,7 +43,10 @@ writeUserFile PROC username:ptr byte, password:ptr byte, friends:ptr byte
 	ret
 writeUserFile ENDP
 
+;--------------------------------------------------------------
 getUserInfo PROC username:ptr byte, header:ptr byte, buffer:ptr byte
+; get UserInfo by header
+;--------------------------------------------------------------
 	local @fp				:dword
 	local @flen				:dword
 	local @buf				:dword
@@ -94,53 +96,86 @@ getUserInfo ENDP
 writeNewUser PROC USES eax, username:PTR BYTE,password:PTR BYTE
 ; add a new user
 ;--------------------------------------------------------------
-    LOCAL @fp :DWORD  
-    LOCAL @offset  :DWORD
-
-    invoke getUserFileName, addr ALL_USER_FILE
-    mov @fp, fopen(addr userFileName)
-    mov @offset, fseek(@fp, 0, FILE_END)
-    fprint @fp, username
-    fclose @fp
-
 	invoke writeUserFile, username, password, offset EMPTY
-   
     ret
 writeNewUser ENDP
 
+;--------------------------------------------------------------
+updateFriendStatus PROC	user:PTR BYTE, friend:PTR BYTE, status:DWORD
+; update friend status
+; if friend doesn't exist, then create
+;--------------------------------------------------------------
+	LOCAL @passwordBuffer[256]:byte
+	LOCAL @friendsBuffer[1024]:byte
+	LOCAL @buf[1024]:byte
+
+	invoke getUserInfo, user, offset PASSWORD_HEADER, addr @passwordBuffer
+	invoke getUserInfo, user, offset FRIENDS_HEADER, addr @friendsBuffer
+
+	invoke crt_strstr, addr @friendsBuffer, friend
+	.if eax == 0 ; if user doesn't exists
+		.if @friendsBuffer != 0
+			invoke crt_strcat, addr @friendsBuffer, offset SEP
+		.endif
+		invoke crt_sprintf, addr @buf, offset MSG_FORMAT5, friend, status
+		invoke crt_strcat, addr @friendsBuffer, addr @buf
+	.else
+		invoke crt_strstr, eax, offset SEP1
+		inc eax
+		mov ebx, status
+		add ebx, 48 ; convert into ASCII code
+		mov [eax], bl
+	.endif
+	invoke writeUserFile, user, addr @passwordBuffer, addr @friendsBuffer
+	ret
+updateFriendStatus ENDP
+
 
 ;--------------------------------------------------------------
-writeNewFriend PROC USES eax, user1:PTR BYTE, user2:PTR BYTE
-; add friends list to user1 and user2
+deleteFriend PROC user:PTR BYTE, friend:PTR BYTE
+; delete friend
 ;--------------------------------------------------------------
-	LOCAL @passwordBuffer[256] :byte
-	LOCAL @friendsBuffer[1024] :byte
-    
-    invoke getUserInfo, user1, offset PASSWORD_HEADER, addr @passwordBuffer
-	invoke getUserInfo, user1, offset FRIENDS_HEADER, addr @friendsBuffer
-	invoke crt_strstr, addr @friendsBuffer, user2
-	.if eax == 0 ; if doesn't exist
-		.if @friendsBuffer != 0
-			invoke crt_strcat, addr @friendsBuffer, addr SEP
-		.endif
-		invoke crt_strcat, addr @friendsBuffer, user2
-	.endif
-	invoke writeUserFile, user1, addr @passwordBuffer, addr @friendsBuffer
+	LOCAL @passwordBuffer :dword
+	LOCAL @friendsBuffer :dword
+	LOCAL @newFriendsBuffer :dword
+	LOCAL @len:dword
+	LOCAL @cursor:dword
 
-    invoke getUserInfo, user2, offset PASSWORD_HEADER, addr @passwordBuffer
-	invoke getUserInfo, user2, offset FRIENDS_HEADER, addr @friendsBuffer
-	invoke crt_strstr, addr @friendsBuffer, user1
-	.if eax == 0 ; if doesn't exist
-		.if @friendsBuffer != 0
-			invoke crt_strcat, addr @friendsBuffer, addr SEP
-		.endif
-		invoke crt_strcat, addr @friendsBuffer, user1
-	.endif
-	invoke writeUserFile, user2, addr @passwordBuffer, addr @friendsBuffer                   
-   
-    ret
-writeNewFriend ENDP
+	mov @passwordBuffer, alloc(256)
+	mov @friendsBuffer, alloc(1024)
+	mov @newFriendsBuffer, alloc(1024)
 
+	invoke getUserInfo, user, offset PASSWORD_HEADER, @passwordBuffer
+	invoke getUserInfo, user, offset FRIENDS_HEADER, @friendsBuffer
+
+	invoke crt_strstr, @friendsBuffer, friend
+	.if eax == 0
+		ret
+	.endif
+	mov @cursor, eax
+	sub eax, @friendsBuffer
+	mov @len, eax
+
+	.if @len > 0 ; friend is not at the first
+		dec @len
+		invoke crt_strncpy, @newFriendsBuffer, @friendsBuffer, @len
+	.endif
+
+	invoke crt_strstr, @cursor, offset SEP
+	.if eax != 0
+		.if @len == 0
+			inc eax
+		.endif
+		invoke crt_strcat, @newFriendsBuffer, eax
+	.endif
+
+	invoke writeUserFile, user, @passwordBuffer, @newFriendsBuffer
+
+	free @passwordBuffer
+	free @friendsBuffer
+	free @newFriendsBuffer
+	ret
+deleteFriend ENDP
 
 ;--------------------------------------------------------------
 ifSignIn PROC  username:PTR BYTE
@@ -158,17 +193,24 @@ ifSignIn PROC  username:PTR BYTE
 ifSignIn ENDP
 
 ;--------------------------------------------------------------
-ifFriends PROC  user1:PTR BYTE,user2:PTR BYTE  
-; check if user1 and user2 are friends
+ifFriends PROC  user:PTR BYTE, friend:PTR BYTE  
+; check if "friend" is "user"'s friend
 ; eax = 1 if yes
 ; eax = 0 if no
 ;--------------------------------------------------------------
 	LOCAL @friendsBuffer[1024] :byte
-	
-	invoke getUserInfo, user1, offset FRIENDS_HEADER, addr @friendsBuffer
-	invoke crt_strstr, addr @friendsBuffer, user2
+
+	invoke getUserInfo, user, offset FRIENDS_HEADER, addr @friendsBuffer
+	invoke crt_strstr, addr @friendsBuffer, friend
 	.if eax != 0
-		mov eax, 1
+		invoke crt_strstr, eax, offset SEP1
+		inc eax
+		mov bl, [eax]
+		.if bl == IS_FRIEND_ASCII
+			mov eax, 1
+		.else
+			mov eax, 0
+		.endif
 	.endif
 	ret
 ifFriends ENDP

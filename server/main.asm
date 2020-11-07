@@ -25,38 +25,6 @@ client STRUCT
 client ENDS
 
 ;==================== CONST =======================
-.const
-BUFSIZE		EQU		104857600
-BACKLOG		EQU		5
-
-IDC_COUNT EQU 40002
-
-CLIENT_SIGNUP		EQU		48 ; ASCII '0'
-CLIENT_LOGIN		EQU		49 ; ASCII '1'
-CLIENT_ROOM_TALK	EQU		50 ; ASCII '2'
-CLIENT_1TO1_TALK	EQU		51 ; ASCII '3'
-CLIENT_ADD_FRIEND	EQU		52 ; ASCII '4'
-CLIENT_FRI_REPLY	EQU		53 ; ASCII '5'
-CLIENT_DEL_FRIEND	EQU		54 ; ASCII '6'
-
-SERVER_INVALID			EQU		-1
-SERVER_FAIL				EQU		0
-SERVER_SUCCESS			EQU		1
-SERVER_ROOM_TALK		EQU		2
-SERVER_1TO1_TALK		EQU		3
-SERVER_FRIEND_APPLY		EQU		4
-SERVER_FRIEND_LIST		EQU		5
-SERVER_FRIEND_NOTIFY	EQU		6
-
-FRIEND_ONLINE	EQU		0
-FRIEND_OFFLINE	EQU		1
-FRIEND_PASS		EQU		2
-FRIEND_REJECT	EQU		3
-FRIEND_DEL		EQU		4
-
-IS_FRIEND_ASCII			EQU		48 ; ASCII '0'
-FRIEND_ONLINE_ASCII		EQU		49 ; ASCII '1'
-FRIEND_OFFLINE_ASCII	EQU		50 ; ASCII '2'
 
 ;==================== DATA =======================
 .data
@@ -66,10 +34,10 @@ START_HINT			db "SERVER START!", 0dh, 0ah, 0
 
 SUCCESS_HINT		db "1", 0
 SIGNUP_SUCCESS_HINT db "USER %s SIGNUP", 0ah, 0dh, 0
-SIGNUP_FAIL_HINT	db "UsER %s SIGNUP FAIL", 0ah, 0dh, 0
+SIGNUP_FAIL_HINT	db "USER %s SIGNUP FAIL", 0ah, 0dh, 0
 LOGIN_SUCCESS_HINT	db "USER %s LOGIN", 0ah, 0dh, 0
 LOGIN_FAIL_HINT		db "USER %s LOGIN FAIL", 0ah, 0dh, 0
-
+LOGOUT_HINT			db "USER %s LOGOUT", 0ah, 0dh, 0
 
 ERR_BUILD_SOCKET	db "Fail to Open Socket", 0
 ERR_BIND_SOCKET		db "Fail to Bind Socket", 0
@@ -78,12 +46,6 @@ ERR_WRONG_PASS		db "Password is wrong", 0
 ERR_NO_SUCH_USER	db "No User %s, please sign in firstly", 0
 ERR_REPEAT_LOGIN	db "User %s already login", 0
 
-
-MSG_FORMAT0			db "%d", 0
-MSG_FORMAT1			db "%d %s", 0
-MSG_FORMAT2			db "%s%s %d ", 0
-MSG_FORMAT3			db "%d %s %s", 0
-MSG_FORMAT4			db "%d %s %d", 0
 
 ; thread
 dwThreadCounter dd ?
@@ -191,64 +153,6 @@ addNewClient PROC uses ebx username:ptr byte, fd:dword
 ret
 addNewClient ENDP
 
-
-;--------------------------------------------------------------
-addNewFriend PROC user1:ptr byte, user2:ptr byte
-; eax = 1 if success
-; eax = 0 if not
-; make user1 and user2 to be friends
-;--------------------------------------------------------------
-	LOCAL @msgField:ptr byte
-	LOCAL @user1Online:dword
-	LOCAL @user1Sockfd:dword
-	LOCAL @user2Online:dword
-	LOCAL @user2Sockfd:dword
-
-	invoke ifSignIn, user1
-	.if eax == 0
-		ret
-	.endif
-
-	invoke ifSignIn, user2
-	.if eax == 0
-		ret
-	.endif
-
-	invoke ifFriends, user1, user2
-	.if eax == 1
-		mov eax, 0
-		ret
-	.endif
-
-	invoke writeNewFriend, user1, user2
-
-	invoke getClientFd, user1, addr @user1Sockfd
-	mov @user1Online, eax
-	
-	invoke getClientFd, user2, addr @user2Sockfd
-	mov @user2Online, eax
-
-	mov @msgField, alloc(BUFSIZE)
-
-	.if @user1Online == 1
-		invoke RtlZeroMemory, @msgField, BUFSIZE
-		invoke crt_sprintf, @msgField, addr MSG_FORMAT4, SERVER_ADD_FRIEND, user2, @user2Online
-		invoke crt_strlen, @msgField
-		invoke send, @user1Sockfd, @msgField, eax, 0
-	.endif
-
-	.if @user2Online == 1
-		invoke RtlZeroMemory, @msgField, BUFSIZE
-		invoke crt_sprintf, @msgField, addr MSG_FORMAT4, SERVER_ADD_FRIEND, user1, @user1Online
-		invoke crt_strlen, @msgField
-		invoke send, @user2Sockfd, @msgField, eax, 0
-	.endif
-
-	free @msgField
-	mov eax, 1
-	ret
-addNewFriend ENDP
-
 ;--------------------------------------------------------------
 checkFriendOnOffLine PROC friendList:ptr byte
 ; check friend online or offline
@@ -261,7 +165,13 @@ checkFriendOnOffLine PROC friendList:ptr byte
 	LOCAL @len:dword
 	LOCAL @username[256]:byte
 	LOCAL @friendType:byte
+	LOCAL @friendTypePos:dword
 	LOCAL @sockfd:dword
+
+	invoke crt_strlen, friendList
+	.if eax == 0
+		ret
+	.endif
 
 	mov eax, friendList
 	mov @cursor, eax
@@ -273,6 +183,7 @@ checkFriendOnOffLine PROC friendList:ptr byte
 			jmp finish
 		.endif
 		dec eax
+		mov @friendTypePos, eax
 		mov bl, [eax]
 		mov @friendType, bl
 
@@ -285,9 +196,16 @@ checkFriendOnOffLine PROC friendList:ptr byte
 
 		.if @friendType == IS_FRIEND_ASCII
 			invoke getClientFd, addr @username, addr @sockfd
-			invoke crt_printf, offset msgFormat3, @friendType, addr @username
+			.if eax == 1
+				mov eax, @friendTypePos
+				mov bl, FRIEND_ONLINE_ASCII
+				mov [eax], bl
+			.else
+				mov eax, @friendTypePos
+				mov bl, FRIEND_OFFLINE_ASCII
+				mov [eax], bl
+			.endif
 		.endif
-
 
 		mov eax, @len
 		add eax, 3
@@ -300,7 +218,8 @@ checkFriendOnOffLine ENDP
 
 ;--------------------------------------------------------------
 broadcastOnOffLine PROC uses ebx currentname:ptr byte, isOn:dword
-; broadcase all the online friends the current user is online/offline
+; 6 Friend 1 (user online)
+; 6 Friend 2 (user offline)
 ;--------------------------------------------------------------
 	LOCAL targetname:ptr byte
 	LOCAL targetfd:dword
@@ -317,9 +236,9 @@ broadcastOnOffLine PROC uses ebx currentname:ptr byte, isOn:dword
 			invoke ifFriends, targetname, currentname
 			.if eax == 1
 				.if isOn == 1
-					invoke crt_sprintf, addr @msgField, addr MSG_FORMAT1, SERVER_FRIEND_ONLINE, currentname
+					invoke crt_sprintf, addr @msgField, addr MSG_FORMAT4, SERVER_FRIEND_NOTIFY, currentname, FRIEND_ONLINE
 				.else
-					invoke crt_sprintf, addr @msgField, addr MSG_FORMAT1, SERVER_FRIEND_OFFLINE, currentname
+					invoke crt_sprintf, addr @msgField, addr MSG_FORMAT4, SERVER_FRIEND_NOTIFY, currentname, FRIEND_OFFLINE
 				.endif
 				invoke crt_strlen, addr @msgField
 				invoke send, targetfd, addr @msgField, eax, 0
@@ -332,64 +251,170 @@ broadcastOnOffLine PROC uses ebx currentname:ptr byte, isOn:dword
 	ret
 broadcastOnOffLine ENDP
 
+;--------------------------------------------------------------
+sendMsgToChatRoom PROC sourceUser:ptr byte, msg:ptr byte
+; format: 2 sourceUsr Msg
+;--------------------------------------------------------------
+	LOCAL @msgField:dword
+	LOCAL @msgLen:dword
+	LOCAL @sockfd:dword
+	mov @msgField, alloc(BUFSIZE)
+	
+	invoke crt_sprintf, @msgField, offset MSG_FORMAT3, SERVER_ROOM_TALK, sourceUser, msg
+	invoke crt_strlen, @msgField
+	mov @msgLen, eax
+
+	mov eax, 0 ; cur client num
+	mov ebx, 0 ; cur client offset
+	.while eax < clientnum
+		pushad
+		.if clientlist[ebx].online == 1
+			mov eax, clientlist[ebx].sockfd
+			mov @sockfd, eax
+			invoke crt_strcmp, sourceUser, addr clientlist[ebx].username
+			.if eax != 0
+				invoke send, @sockfd, @msgField, @msgLen, 0
+				.if eax == SOCKET_ERROR
+					mov eax, 0
+					ret
+				.endif
+			.endif
+		.endif
+		popad
+
+		inc eax
+		add ebx, type client
+	.endw
+
+	free @msgField
+	mov eax, 1
+	ret
+sendMsgToChatRoom ENDP
+
 
 ;--------------------------------------------------------------
-parseClientCmd PROC buffer:ptr byte, targetfd:ptr dword, content:ptr byte
-; possible format:
-; 1 tgtUsername content (send text)
-; 2 tgtUsername image (send image)
-; 3 tgtUsername (add friend)
-; 4 tgtUsername (delete friend)
+sendMsgToUser PROC sourceUser:ptr byte, targetUser:ptr byte, msg:ptr byte
+; format: 3 sourceUsr Msg
 ;--------------------------------------------------------------
-	LOCAL @userStart:dword
-	LOCAL @msgStart:dword
-	LOCAL @clientCmd:byte
-
-	mov eax, buffer
-	mov bl, [eax]
-	mov @clientCmd, bl
-
-	.if @clientCmd == CLIENT_SEND_MSG || @clientCmd == CLIENT_SEND_FIG
-
-		mov @userStart, eax
-		add @userStart, 2
-		invoke crt_strstr, @userStart, offset SEP
-		mov @msgStart, eax
-		inc @msgStart
-
-		mov bl, 0
-		mov [eax], bl
-		invoke getClientFd, @userStart, targetfd
-		.if eax == 0
-			mov eax, SERVER_INVALID
-			ret
-		.endif
-		invoke crt_strcpy, content, @msgStart
-		
-		.if @clientCmd == CLIENT_SEND_MSG
-			mov eax, SERVER_SEND_MSG
-		.else 
-			mov eax, SERVER_SEND_FIG
-		.endif
-
-		ret
-	.elseif @clientCmd == CLIENT_ADD_FRIEND || @clientCmd == CLIENT_DEL_FRIEND
-		add eax, 2
-		invoke crt_strcpy, content, eax
-
-		.if @clientCmd == CLIENT_ADD_FRIEND
-			mov eax, SERVER_ADD_FRIEND
-		.else 
-			mov eax, SERVER_DEL_FRIEND
-		.endif
-
+	LOCAL @msgField:dword
+	LOCAL @msgLen:dword
+	LOCAL @sockfd:dword
+	mov @msgField, alloc(BUFSIZE)
+	
+	invoke crt_sprintf, @msgField, offset MSG_FORMAT3, SERVER_1TO1_TALK, sourceUser, msg
+	invoke crt_strlen, @msgField
+	mov @msgLen, eax
+	
+	invoke getClientFd, targetUser, addr @sockfd
+	.if eax == 0
 		ret
 	.endif
 
-	mov eax, SERVER_INVALID
-	ret
-parseClientCmd ENDP
+	invoke send, @sockfd, @msgField, @msgLen, 0
+	.if eax == SOCKET_ERROR
+		mov eax, 0
+		ret
+	.endif
 
+	free @msgField
+	mov eax, 1
+	ret
+sendMsgToUser ENDP
+
+;--------------------------------------------------------------
+sendFriendRequest PROC sourceUser:ptr byte, targetUser:ptr byte
+; format: 4 targetUser
+;--------------------------------------------------------------
+	LOCAL @msgField:dword
+	LOCAL @msgLen:dword
+	LOCAL @sockfd:dword
+
+	mov @msgField, alloc(BUFSIZE)
+
+	invoke crt_sprintf, @msgField, offset MSG_FORMAT1, SERVER_FRIEND_APPLY, sourceUser
+	invoke crt_strlen, @msgField
+	mov @msgLen, eax
+
+	invoke getClientFd, targetUser, addr @sockfd
+	.if eax == 0
+		ret
+	.endif
+
+	invoke send, @sockfd, @msgField, @msgLen, 0
+	.if eax == SOCKET_ERROR
+		mov eax, 0
+		ret
+	.endif
+
+	free @msgField
+	mov eax, 1
+	ret
+sendFriendRequest ENDP
+
+
+;--------------------------------------------------------------
+sendFriendRequestReply PROC sourceUser:ptr byte, targetUser:ptr byte, passed:dword
+; format: 6 targetUser 4/5 （4 pass / 5 reject)
+;--------------------------------------------------------------
+	LOCAL @msgField:dword
+	LOCAL @msgLen:dword
+	LOCAL @sockfd:dword
+
+	mov @msgField, alloc(BUFSIZE)
+
+	.if passed
+		invoke crt_sprintf, @msgField, offset MSG_FORMAT4, SERVER_FRIEND_NOTIFY, sourceUser, FRIEND_APPLY_PASS
+	.else
+		invoke crt_sprintf, @msgField, offset MSG_FORMAT4, SERVER_FRIEND_NOTIFY, sourceUser, FRIEND_APPLY_REJ
+	.endif
+	invoke crt_strlen, @msgField
+	mov @msgLen, eax
+
+	invoke getClientFd, targetUser, addr @sockfd
+	.if eax == 0
+		ret
+	.endif
+
+	invoke send, @sockfd, @msgField, @msgLen, 0
+	.if eax == SOCKET_ERROR
+		mov eax, 0
+		ret
+	.endif
+
+	free @msgField
+	mov eax, 1
+	ret
+sendFriendRequestReply ENDP
+
+;--------------------------------------------------------------
+notifyFriendDeleted PROC sourceUser:ptr byte, targetUser:ptr byte
+; format: 6 targetUser 6
+;--------------------------------------------------------------
+	LOCAL @msgField:dword
+	LOCAL @msgLen:dword
+	LOCAL @sockfd:dword
+
+	mov @msgField, alloc(BUFSIZE)
+
+	invoke crt_sprintf, @msgField, offset MSG_FORMAT4, SERVER_FRIEND_NOTIFY, sourceUser, FRIEND_DELETED
+	invoke crt_strlen, @msgField
+	mov @msgLen, eax
+
+	invoke getClientFd, targetUser, addr @sockfd
+	.if eax == 0
+		ret
+	.endif
+
+	invoke send, @sockfd, @msgField, @msgLen, 0
+	.if eax == SOCKET_ERROR
+		mov eax, 0
+		ret
+	.endif
+
+	free @msgField
+	mov eax, 1
+	ret
+notifyFriendDeleted ENDP
 
 ;--------------------------------------------------------------
 serviceThread PROC uses ebx clientid:dword
@@ -398,11 +423,15 @@ serviceThread PROC uses ebx clientid:dword
 	LOCAL @stFdset:fd_set, @stTimeval:timeval
 	LOCAL @szBuffer:ptr byte
 	LOCAL @currentUsername[64]:byte
-	LOCAL @targetSockfd:dword
-	LOCAL @msgContent:ptr byte
+	LOCAL @tgtUsername[64]:byte
 	LOCAL @msgField:ptr byte
-	LOCAL @sockfd:DWORD
+	LOCAL @msgContent:ptr byte
+	LOCAL @sockfd:dword
 	LOCAL @friendlist[1024]:byte
+	LOCAL @clientCmd:byte
+	LOCAL @tmpCmd:dword
+	LOCAL @friendRequestPassed:dword
+
 	mov @szBuffer, alloc(BUFSIZE)
 	mov @msgField, alloc(BUFSIZE)
 	mov @msgContent, alloc(BUFSIZE)
@@ -418,8 +447,8 @@ serviceThread PROC uses ebx clientid:dword
 	; read and send friend lists to current user
 	invoke RtlZeroMemory, addr @friendlist, 1024
 	invoke readAllFriends, addr @currentUsername, addr @friendlist
-	invoke RtlZeroMemory, @msgField, BUFSIZE
-	invoke parseFriendList, addr @friendlist, @msgField
+	invoke checkFriendOnOffLine, addr @friendlist
+	invoke crt_sprintf, @msgField, offset MSG_FORMAT1, SERVER_FRIEND_LIST, addr @friendlist
 	invoke crt_strlen, @msgField
 	invoke send, @sockfd, @msgField, eax, 0
 
@@ -430,52 +459,74 @@ serviceThread PROC uses ebx clientid:dword
 	invoke SetDlgItemInt, hWinMain, IDC_COUNT, dwThreadCounter, FALSE
 
 	.while 1
-		mov @stFdset.fd_count,1
+		mov @stFdset.fd_count, 1
 		push @sockfd
 		pop @stFdset.fd_array
 		mov @stTimeval.tv_usec,200*1000 ;ms
 		mov @stTimeval.tv_sec,0
 		invoke select, 0, addr @stFdset, NULL, NULL, addr @stTimeval ; wait for client cmd
 
-		.if eax == SOCKET_ERROR
+		.break .if eax == SOCKET_ERROR
+		.break .if !eax
+
+		invoke RtlZeroMemory, @szBuffer, BUFSIZE
+		invoke recv, @sockfd, @szBuffer, BUFSIZE, 0
+		.break .if eax == SOCKET_ERROR
+		.break .if !eax
+
+		mov eax, @szBuffer
+		mov bl, [eax]
+		mov @clientCmd, bl
+		.if @clientCmd == CLIENT_ROOM_TALK_ASCII
+			mov eax, @szBuffer
+			add eax, 2
+			invoke sendMsgToChatRoom, addr @currentUsername, eax
+			.break .if eax == 0
+
+		.elseif @clientCmd == CLIENT_1TO1_TALK_ASCII
+			invoke crt_sscanf, @szBuffer, offset MSG_FORMAT6, addr @tmpCmd, addr @tgtUsername, @msgContent
+			invoke sendMsgToUser, addr @currentUsername, addr @tgtUsername, @msgContent
+			.break  .if eax == 0
+
+		.elseif @clientCmd == CLIENT_FRIEND_APPLY_ASCII
+			mov eax, @szBuffer
+			add eax, 2
+
+			push eax
+			invoke sendFriendRequest, addr @currentUsername, eax
+			.break  .if eax == 0
+			pop eax
+
+			invoke updateFriendStatus, addr @currentUsername, eax, FRIEND_PADDING
+
+		.elseif @clientCmd == CLIENT_FRIEND_REPLY_ASCII
+			invoke crt_sscanf, @szBuffer, offset MSG_FORMAT4, addr @tmpCmd, addr @tgtUsername, addr @friendRequestPassed
+			invoke sendFriendRequestReply, addr @currentUsername, addr @tgtUsername, @friendRequestPassed
+			.break .if eax == 0
+
+			.if @friendRequestPassed
+				invoke updateFriendStatus, addr @currentUsername, addr @tgtUsername, IS_FRIEND
+				invoke updateFriendStatus, addr @tgtUsername, addr @currentUsername, IS_FRIEND
+			.elseif
+				invoke updateFriendStatus, addr @tgtUsername, addr @currentUsername, FRIEND_APPLY_REJ
+			.endif
+
+		.elseif @clientCmd == CLIENT_FRIEND_DELETE_ASCII
+			invoke crt_sscanf, @szBuffer, offset MSG_FORMAT1, addr @tmpCmd, addr @tgtUsername
+			invoke notifyFriendDeleted, addr @currentUsername, addr @tgtUsername
+			.break .if eax == 0
+
+			invoke deleteFriend, addr @currentUsername, addr @tgtUsername 
+			invoke updateFriendStatus, addr @tgtUsername, addr @currentUsername, FRIEND_DELETED
+
+		.elseif @clientCmd == CLIENT_LOGOUT_ASCII
 			.break
 		.endif
-		.if eax
-			invoke RtlZeroMemory, @szBuffer, BUFSIZE
-			invoke recv, @sockfd, @szBuffer, BUFSIZE, 0
-			.break  .if eax == SOCKET_ERROR
-			.break  .if !eax
-			; parse client commend
-			invoke RtlZeroMemory, @msgContent, BUFSIZE
-			invoke parseClientCmd, @szBuffer, addr @targetSockfd, @msgContent
 
-			.if eax == SERVER_SEND_MSG
-				invoke RtlZeroMemory, @msgField, BUFSIZE
-				invoke crt_sprintf, @msgField, addr MSG_FORMAT3, SERVER_SEND_MSG, addr @currentUsername, @msgContent
-				invoke crt_strlen, @msgField
-				invoke send, @targetSockfd, @msgField, eax, 0
-				.break  .if eax == SOCKET_ERROR
-
-			.elseif eax == SERVER_SEND_FIG
-				invoke RtlZeroMemory, @msgField, BUFSIZE
-				invoke crt_sprintf, @msgField, addr msgFormat1, SERVER_SEND_FIG, addr @currentUsername, @msgContent
-				invoke crt_strlen, @msgField
-				invoke send, @targetSockfd, @msgField, eax, 0
-				.break  .if eax == SOCKET_ERROR
-
-			.elseif eax == SERVER_ADD_FRIEND
-				invoke addNewFriend, addr @currentUsername, @msgContent
-				.if eax == 0
-					invoke send, @sockfd, addr addFriendFail, sizeof addFriendFail, 0
-				.endif
-			.elseif eax == SERVER_DEL_FRIEND
-				; TBD
-			.endif
-		.endif
 	.endw
 	invoke closesocket, @sockfd
 	dec dwThreadCounter
-	; 从当前用户列表更改该下线用户状态
+
 	mov eax, clientid
 	mov ebx, type client
 	mul ebx
@@ -483,8 +534,10 @@ serviceThread PROC uses ebx clientid:dword
 	; 向好友广播其下线信息
 	invoke broadcastOnOffLine, addr @currentUsername, 0
 
-	free @msgField
+	invoke crt_printf, offset LOGOUT_HINT, addr @currentUsername
+
 	free @szBuffer
+	free @msgField
 	free @msgContent
 	invoke SetDlgItemInt,hWinMain,IDC_COUNT,dwThreadCounter,FALSE
 	ret
@@ -557,32 +610,18 @@ clientConnect PROC sockfd:dword
 ; sign in: 0 username password
 ; login in: 1 username password
 ;--------------------------------------------------------------
-	LOCAL @cursor:dword
 	LOCAL @buffer[512]:byte
-	LOCAL @type:byte
+	LOCAL @type:dword
 	LOCAL @username[256]:byte
 	LOCAL @password[256]:byte
 
+
 	invoke RtlZeroMemory, addr @buffer, 512
-	invoke recv, sockfd, addr @buffer, sizeof @buffer, 0
+	invoke recv, sockfd, addr @buffer, 512, 0
 	
-	mov al, @buffer
-	mov @type, al
+	invoke crt_sscanf, addr @buffer, offset MSG_FORMAT3, addr @type, addr @username, addr @password
 
-	mov @cursor, addr @buffer
-	add @cursor, 2
-	invoke crt_strstr, @cursor, offset SEP
-	push eax
-	mov [eax], 0
-	invoke crt_strcpy, addr @username, @cursor
-	pop eax
-
-	mov @cursor, eax
-	inc @cursor
-	invoke crt_strcpy, addr @password, @cursor
-
-
-	.if @type == CLIENT_SIGNUP
+	.if @type == CLIENT_LOGIN
 		invoke logIn, sockfd, addr @username, addr @password
 		.if eax != -1
 			push eax
@@ -594,7 +633,7 @@ clientConnect PROC sockfd:dword
 			mov eax, -1
 			ret
 		.endif
-	.elseif @type == CLIENT_LOGIN
+	.elseif @type == CLIENT_SIGNUP
 		invoke signIn, sockfd, addr @username, addr @password
 		.if eax == 1
 			invoke crt_printf, addr SIGNUP_SUCCESS_HINT, addr @username
