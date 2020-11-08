@@ -224,6 +224,8 @@ broadcastOnOffLine PROC uses ebx currentname:ptr byte, isOn:dword
 	LOCAL targetname:ptr byte
 	LOCAL targetfd:dword
 	LOCAL @msgField[1024]:byte
+	LOCAL @replyBuffer[512]:byte
+
 	mov eax, 0
 	mov ebx, 0
 	.while eax < clientnum
@@ -242,6 +244,13 @@ broadcastOnOffLine PROC uses ebx currentname:ptr byte, isOn:dword
 				.endif
 				invoke crt_strlen, addr @msgField
 				invoke send, targetfd, addr @msgField, eax, 0
+
+				;invoke RtlZeroMemory, addr @replyBuffer, 512
+				;invoke recv, targetfd, addr @replyBuffer, 512, 0
+				;.if @replyBuffer[0] == '0'
+				;	invoke crt_printf, offset MSG_FORMAT9, targetname, addr @replyBuffer
+				;.endif
+
 			.endif
 		.endif
 		popad
@@ -416,6 +425,143 @@ notifyFriendDeleted PROC sourceUser:ptr byte, targetUser:ptr byte
 	ret
 notifyFriendDeleted ENDP
 
+sendRoomMembers PROC username:ptr byte
+	LOCAL @sockfd:dword
+	LOCAL @friendlist[2048]:dword
+	LOCAL @msgField:dword
+	LOCAL @msgLen:dword
+	LOCAL @friendNum:dword
+	LOCAL @replyBuffer[512]:byte
+
+	mov @msgField, alloc(BUFSIZE)
+
+	invoke RtlZeroMemory, addr @friendlist, 2048
+	mov eax, 0 ; cur client num
+	mov ebx, 0 ; cur client offset
+	.while eax < clientnum
+		pushad
+		.if clientlist[ebx].online == 1
+			invoke crt_strcmp, username, addr clientlist[ebx].username
+			.if eax != 0
+				.if @friendlist[0] != 0
+					invoke crt_strcat, addr @friendlist, addr SEP
+				.endif
+				invoke crt_strcat, addr @friendlist, addr clientlist[ebx].username
+			.endif
+		.endif
+		popad
+
+		inc eax
+		add ebx, type client
+	.endw
+	
+	invoke getClientFd, username, addr @sockfd
+	.if eax == 0
+		free @msgField
+		mov eax, 0
+		ret
+	.endif
+
+	invoke crt_sprintf, @msgField, offset MSG_FORMAT1, SERVER_ROOM_MEMBERS, addr @friendlist
+	invoke crt_strlen, @msgField
+	mov @msgLen, eax
+	invoke send, @sockfd, @msgField, @msgLen, 0
+	
+
+	;invoke RtlZeroMemory, addr @replyBuffer, 512
+	;invoke recv, @sockfd, addr @replyBuffer, 512, 0
+	;.if @replyBuffer[0] == '0'
+;		invoke crt_printf, offset MSG_FORMAT9, username, addr @replyBuffer
+;		free @msgField
+;		mov eax, 0
+;		ret
+;	.else
+;		free @msgField
+;		mov eax, 1
+;		ret
+;	.endif
+
+	mov eax, 1
+	free @msgField
+	ret
+sendRoomMembers ENDP
+
+
+notifyJoinOrLeaveRoom PROC username:ptr byte, join:dword
+	LOCAL @sockfd:dword
+	LOCAL @msgField:dword
+	LOCAL @msgLen:dword
+	LOCAL @szBuffer[256]:byte
+	LOCAL @replyBuffer[512]:byte
+
+	mov @msgField, alloc(BUFSIZE)
+
+	invoke crt_sprintf, @msgField, offset MSG_FORMAT4, SERVER_JOIN_LEAVE, username, join
+	invoke crt_strlen, @msgField
+	mov @msgLen, eax
+
+	mov eax, 0 ; cur client num
+	mov ebx, 0 ; cur client offset
+	.while eax < clientnum
+		pushad
+		.if clientlist[ebx].online == 1
+			mov eax, clientlist[ebx].sockfd
+			mov @sockfd, eax
+			invoke crt_strcmp, username, addr clientlist[ebx].username
+			.if eax != 0
+				invoke send, @sockfd, @msgField, @msgLen, 0
+				.if eax == SOCKET_ERROR
+					mov eax, 0
+					ret
+				.endif
+
+				;invoke RtlZeroMemory, addr @replyBuffer, 512
+				;invoke recv, @sockfd, addr @replyBuffer, 512, 0
+				;.if @replyBuffer[0] == '0'
+				;	popad
+				;	pushad
+				;	invoke crt_printf, offset MSG_FORMAT9, addr clientlist[ebx].username, addr @replyBuffer
+				;.endif
+
+			.endif
+		.endif
+		popad
+
+		inc eax
+		add ebx, type client
+	.endw
+
+	free @msgField
+	mov eax, 1
+	ret
+notifyJoinOrLeaveRoom ENDP
+
+sendFriendList PROC username:ptr byte, connfd:dword
+	LOCAL @friendlist[1024]:byte
+	LOCAL @replyBuffer[512]:byte
+	LOCAL @msgField:dword
+
+	mov @msgField, alloc(BUFSIZE)
+
+	; read and send friend lists to current user
+	invoke RtlZeroMemory, addr @friendlist, 1024
+	invoke readAllFriends, username, addr @friendlist
+	invoke checkFriendOnOffLine, addr @friendlist
+	invoke crt_sprintf, @msgField, offset MSG_FORMAT1, SERVER_FRIEND_LIST, addr @friendlist
+	invoke crt_strlen, @msgField
+	invoke send, connfd, @msgField, eax, 0
+
+	;invoke RtlZeroMemory, addr @replyBuffer, 512
+	;invoke recv, connfd, addr @replyBuffer, 512, 0
+	;.if @replyBuffer[0] == '0'
+;		invoke crt_printf, offset MSG_FORMAT9, username, addr @replyBuffer
+;	.endif
+
+	free @msgField
+	ret
+sendFriendList ENDP
+
+
 ;--------------------------------------------------------------
 serviceThread PROC uses ebx clientid:dword
 ; function to handle client request
@@ -427,7 +573,7 @@ serviceThread PROC uses ebx clientid:dword
 	LOCAL @msgField:ptr byte
 	LOCAL @msgContent:ptr byte
 	LOCAL @sockfd:dword
-	LOCAL @friendlist[1024]:byte
+
 	LOCAL @clientCmd:byte
 	LOCAL @tmpCmd:dword
 	LOCAL @friendRequestPassed:dword
@@ -444,30 +590,31 @@ serviceThread PROC uses ebx clientid:dword
 	mov @sockfd, edx
 	invoke crt_strcpy, addr @currentUsername, addr clientlist[eax].username
 
-	; read and send friend lists to current user
-	invoke RtlZeroMemory, addr @friendlist, 1024
-	invoke readAllFriends, addr @currentUsername, addr @friendlist
-	invoke checkFriendOnOffLine, addr @friendlist
-	invoke crt_sprintf, @msgField, offset MSG_FORMAT1, SERVER_FRIEND_LIST, addr @friendlist
-	invoke crt_strlen, @msgField
-	invoke send, @sockfd, @msgField, eax, 0
+	; send room members to current user
+	invoke sendRoomMembers, addr @currentUsername
 
-	; tell his friend that he is on/offline
+	; tell other members current user is joining
+	invoke notifyJoinOrLeaveRoom, addr @currentUsername, 1
+
+	; read and send friend lists to current user
+	invoke sendFriendList, addr @currentUsername, @sockfd
+
+	; tell his friend that he is online
 	invoke broadcastOnOffLine, addr @currentUsername, 1
 
 	inc dwThreadCounter
 	invoke SetDlgItemInt, hWinMain, IDC_COUNT, dwThreadCounter, FALSE
 
 	.while 1
-;		mov @stFdset.fd_count, 1
-;		push @sockfd
-;		pop @stFdset.fd_array
-;		mov @stTimeval.tv_usec,200*1000 ;ms
-;		mov @stTimeval.tv_sec,0
-;		invoke select, 0, addr @stFdset, NULL, NULL, addr @stTimeval ; wait for client cmd
-;
-;		.break .if eax == SOCKET_ERROR
-;		.continue .if eax == 0
+		mov @stFdset.fd_count, 1
+		push @sockfd
+		pop @stFdset.fd_array
+		mov @stTimeval.tv_usec,200*1000 ;ms
+		mov @stTimeval.tv_sec,0
+		invoke select, 0, addr @stFdset, NULL, NULL, addr @stTimeval ; wait for client cmd
+
+		.break .if eax == SOCKET_ERROR
+		.continue .if eax == 0
 
 		invoke RtlZeroMemory, @szBuffer, BUFSIZE
 		invoke recv, @sockfd, @szBuffer, BUFSIZE, 0
@@ -518,7 +665,6 @@ serviceThread PROC uses ebx clientid:dword
 
 			invoke deleteFriend, addr @currentUsername, addr @tgtUsername 
 			invoke updateFriendStatus, addr @tgtUsername, addr @currentUsername, FRIEND_DELETED
-
 		.elseif @clientCmd == CLIENT_LOGOUT_ASCII
 			.break
 		.endif
@@ -531,7 +677,11 @@ serviceThread PROC uses ebx clientid:dword
 	mov ebx, type client
 	mul ebx
 	mov clientlist[eax].online, 0
-	; 向好友广播其下线信息
+
+	; tell other members current user is leaving
+	invoke notifyJoinOrLeaveRoom, addr @currentUsername, 0
+
+	; tell his friend that he is offline
 	invoke broadcastOnOffLine, addr @currentUsername, 0
 
 	invoke crt_printf, offset LOGOUT_HINT, addr @currentUsername
