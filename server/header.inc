@@ -85,6 +85,5 @@ MSG_FORMAT7			db "%s%s", 0
 MSG_FORMAT8			db "%d %[^", 0dh, "]", 0
 MSG_FORMAT9			db "%s: %s", 0ah, 0dh, 0
 
-
-DEBUG_MSG1	db "%d", 0ah, 0dh, 0
-DEBUG_MSG2	db "%s", 0ah, 0dh, 0
+DEBUG_FORMAT1		db "message send to %s: %s", 0ah, 0dh, 0
+DEBUG_FORMAT2		db "message recv from %s: %s", 0ah, 0dh, 0

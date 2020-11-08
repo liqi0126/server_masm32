@@ -60,6 +60,25 @@ addFriendFail db "6 fail", 0
 ;=================== CODE =========================
 .code
 
+
+sepStrStr PROC msg:ptr byte, msg1:ptr byte, msg2:ptr byte
+	LOCAL @cursor:dword
+	LOCAL @len1:dword
+
+	invoke crt_strstr, msg, offset SEP
+	mov @cursor, eax
+	inc @cursor
+
+	sub eax, msg
+	mov @len1, eax
+
+	invoke crt_strncpy, msg1, msg, @len1
+	invoke crt_strcpy, msg2, @cursor
+	
+	ret
+sepStrStr ENDP
+
+
 ;--------------------------------------------------------------
 getArrayEleByNum PROC arrayPtr:dword, eleSize:dword, Num:dword
 ; eax = array[Num]
@@ -164,6 +183,9 @@ sendMsgToClient PROC username:ptr byte, msgBuffer:ptr byte
 	.if eax == 0
 		ret
 	.endif
+
+
+	invoke crt_printf, offset DEBUG_FORMAT1, username, msgBuffer
 
 	invoke crt_strlen, msgBuffer
 	invoke send, @targetfd, msgBuffer, eax, 0
@@ -492,6 +514,7 @@ sendFriendList ENDP
 serviceThread PROC uses ebx clientid:dword
 ; function to handle client request
 ;--------------------------------------------------------------
+	LOCAL @cursor:dword
 	LOCAL @stFdset:fd_set, @stTimeval:timeval
 	LOCAL @szBuffer:ptr byte
 	LOCAL @currentUsername[64]:byte
@@ -547,7 +570,8 @@ serviceThread PROC uses ebx clientid:dword
 		.break .if eax == SOCKET_ERROR
 		.break .if !eax
 
-		invoke crt_printf, offset MSG_FORMAT9, addr @currentUsername, @szBuffer
+		;DEBUG
+		invoke crt_printf, offset DEBUG_FORMAT2, addr @currentUsername, @szBuffer
 
 		mov eax, @szBuffer
 		mov bl, [eax]
@@ -559,7 +583,11 @@ serviceThread PROC uses ebx clientid:dword
 			.break .if eax == 0
 
 		.elseif @clientCmd == CLIENT_1TO1_TALK_ASCII
-			invoke crt_sscanf, @szBuffer, offset MSG_FORMAT6, addr @tmpCmd, addr @tgtUsername, @msgContent
+			invoke RtlZeroMemory, addr @tgtUsername, 64
+			invoke RtlZeroMemory, @msgContent, BUFSIZE
+			mov ebx, @szBuffer
+			add ebx, 2
+			invoke sepStrStr, ebx, addr @tgtUsername, @msgContent
 			invoke sendMsgToUser, addr @currentUsername, addr @tgtUsername, @msgContent
 			.break  .if eax == 0
 
