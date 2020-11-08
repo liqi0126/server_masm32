@@ -459,15 +459,15 @@ serviceThread PROC uses ebx clientid:dword
 	invoke SetDlgItemInt, hWinMain, IDC_COUNT, dwThreadCounter, FALSE
 
 	.while 1
-		mov @stFdset.fd_count, 1
-		push @sockfd
-		pop @stFdset.fd_array
-		mov @stTimeval.tv_usec,200*1000 ;ms
-		mov @stTimeval.tv_sec,0
-		invoke select, 0, addr @stFdset, NULL, NULL, addr @stTimeval ; wait for client cmd
-
-		.break .if eax == SOCKET_ERROR
-		.break .if !eax
+;		mov @stFdset.fd_count, 1
+;		push @sockfd
+;		pop @stFdset.fd_array
+;		mov @stTimeval.tv_usec,200*1000 ;ms
+;		mov @stTimeval.tv_sec,0
+;		invoke select, 0, addr @stFdset, NULL, NULL, addr @stTimeval ; wait for client cmd
+;
+;		.break .if eax == SOCKET_ERROR
+;		.continue .if eax == 0
 
 		invoke RtlZeroMemory, @szBuffer, BUFSIZE
 		invoke recv, @sockfd, @szBuffer, BUFSIZE, 0
